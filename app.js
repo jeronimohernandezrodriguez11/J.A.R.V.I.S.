@@ -92,39 +92,80 @@ function speak(text) {
   speechSynthesis.speak(u);
 }
 
-/* ---------- Reconocimiento de voz ---------- */
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recognition = null;
+// --- 5. RECONOCIMIENTO DE VOZ (MICRÓFONO BLINDADO) ---
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-if (SR) {
-  recognition = new SR();
+if (SpeechRecognition) {
+  const recognition = new SpeechRecognition();
   recognition.lang = "es-ES";
-  recognition.interimResults = false;
+  recognition.continuous = false;
+  recognition.interimResults = true; // Muestra lo que hablas en tiempo real
   recognition.maxAlternatives = 1;
 
-  recognition.onstart  = () => micBtn.classList.add("listening");
-  recognition.onend    = () => micBtn.classList.remove("listening");
-  recognition.onresult = (e) => sendMessage(e.results[0][0].transcript);
-  recognition.onerror  = (e) => {
-    micBtn.classList.remove("listening");
-    if (e.error === "not-allowed") addMsg("err", "ERROR", "Permiso de micrófono denegado.");
-    else if (e.error !== "no-speech" && e.error !== "aborted") addMsg("err", "ERROR", "Fallo de reconocimiento: " + e.error);
-  };
+  let isListening = false;
+  let finalTranscript = "";
 
   micBtn.addEventListener("click", () => {
-    speechSynthesis.cancel();
-    setState("idle");
-    try { recognition.start(); } catch { recognition.stop(); }
+    window.speechSynthesis.cancel();
+
+    if (isListening) {
+      recognition.stop();
+      return;
+    }
+
+    finalTranscript = "";
+    userInput.value = "";
+    try {
+      recognition.start();
+    } catch (err) {
+      recognition.stop();
+    }
   });
+
+  recognition.onstart = () => {
+    isListening = true;
+    micBtn.classList.add("active");
+    setState("listening", "ESCUCHANDO... HABLA AHORA");
+  };
+
+  recognition.onresult = (e) => {
+    let interimTranscript = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const piece = e.results[i][0].transcript;
+      if (e.results[i].isFinal) {
+        finalTranscript += piece;
+      } else {
+        interimTranscript += piece;
+      }
+    }
+    // Ves en la barra de texto lo que Jarvis está entendiendo en vivo
+    userInput.value = (finalTranscript || interimTranscript).trim();
+  };
+
+  recognition.onerror = (e) => {
+    isListening = false;
+    micBtn.classList.remove("active");
+    const errores = {
+      "not-allowed": "PERMISO DE MICRÓFONO DENEGADO EN EL NAVEGADOR",
+      "no-speech": "NO SE DETECTÓ VOZ — INTÉNTALO DE NUEVO",
+      "audio-capture": "NO SE DETECTA NINGÚN MICRÓFONO CONECTADO",
+      "network": "ERROR DE RED EN EL SERVICIO DE VOZ (USA CHROME O EDGE)"
+    };
+    setState("idle", errores[e.error] || `ERROR DE MICRO: ${e.error.toUpperCase()}`);
+  };
+
+  recognition.onend = () => {
+    isListening = false;
+    micBtn.classList.remove("active");
+    const textToSend = userInput.value.trim();
+    if (textToSend) {
+      sendMessage(textToSend);
+    } else if (core.getAttribute("data-state") === "listening") {
+      setState("idle", "SISTEMA EN LÍNEA — ESPERANDO ÓRDENES");
+    }
+  };
 } else {
-  micBtn.disabled = true;
-  micBtn.title = "Tu navegador no admite reconocimiento de voz (usa Chrome o Edge)";
+  micBtn.addEventListener("click", () => {
+    setState("idle", "ESTE NAVEGADOR NO SOPORTA VOZ — ABRE CHROME O EDGE");
+  });
 }
-
-/* ---------- Eventos de texto ---------- */
-sendBtn.addEventListener("click", () => sendMessage(input.value));
-input.addEventListener("keydown", (e) => { if (e.key === "Enter") sendMessage(input.value); });
-
-/* ---------- Saludo inicial ---------- */
-addMsg("bot", "J.A.R.V.I.S.", "Sistemas en línea. A su disposición, profesor. Alumnos, sean amables: yo no me canso, pero la curiosidad sí debería.");
-setState("idle");
