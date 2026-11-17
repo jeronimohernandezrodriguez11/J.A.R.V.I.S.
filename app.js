@@ -47,8 +47,8 @@ async function sendMessage(text) {
   input.value = "";
   setState("thinking");
 
-  try {
-    const res = await fetch("/.netlify/functions/jarvis", {
+try {
+    const res = await fetch("/api/jarvis", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: text, history }),
