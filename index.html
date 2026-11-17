@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>J.A.R.V.I.S. · Stark Industries</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="hud">
+
+    <!-- Cabecera con estado del sistema -->
+    <header class="panel top">
+      <span class="brand">J.A.R.V.I.S.</span>
+      <span id="status" class="status">SISTEMA EN ESPERA</span>
+    </header>
+
+    <!-- Núcleo animado: el estado se controla con las clases idle | thinking | speaking -->
+    <section class="core-wrap" aria-hidden="true">
+      <div id="core" class="core idle">
+        <div class="ring r1"></div>
+        <div class="ring r2"></div>
+        <div class="ring r3"></div>
+        <div class="ring r4"></div>
+        <div class="nucleus"></div>
+      </div>
+    </section>
+
+    <!-- Registro de conversación estilo terminal -->
+    <aside class="panel log-panel">
+      <div class="log-title">REGISTRO DE COMUNICACIONES</div>
+      <div id="log" class="log" aria-live="polite"></div>
+    </aside>
+
+    <!-- Barra de entrada -->
+    <footer class="panel bar">
+      <button id="mic" class="btn mic" title="Hablar" aria-label="Hablar con Jarvis">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <rect x="9" y="2" width="6" height="12" rx="3"/>
+          <path d="M5 11a7 7 0 0 0 14 0M12 18v4M8 22h8"/>
+        </svg>
+      </button>
+      <input id="input" type="text" placeholder="Escriba su consulta..." autocomplete="off" maxlength="500">
+      <button id="send" class="btn">ENVIAR</button>
+    </footer>
+
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

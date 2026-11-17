@@ -1,0 +1,5 @@
+# Configuración de Netlify: sirve la raíz como sitio estático
+# y expone las funciones serverless en /.netlify/functions/
+[build]
+  publish = "."
+  functions = "netlify/functions"
