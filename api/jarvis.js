@@ -1,9 +1,3 @@
-/**
-- Netlify Function: /.netlify/functions/jarvis
-- Recibe { message, history } y devuelve { reply } consultando a Gemini.
-- La API key vive SOLO en las variables de entorno de Netlify (GEMINI_API_KEY).
- */
-
 const MODEL = "gemini-3.8-flash";
 
 const SYSTEM_PROMPT =
@@ -14,25 +8,25 @@ const SYSTEM_PROMPT =
   "Tu objetivo es pedagógico: si un alumno te hace una pregunta académica, no le des la respuesta masticada; " +
   "dale una pista brillante, hazle razonar y fomenta su curiosidad científica.";
 
-const json = (statusCode, body) => ({
-  statusCode,
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(body),
-});
-
-exports.handler = async (event) => {
-  if (event.httpMethod !== "POST") return json(405, { error: "Método no permitido" });
+module.exports = async (req, res) => {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Método no permitido" });
+  }
 
   const apiKey = process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.trim() : "";
-  if (!apiKey) return json(500, { error: "Falta GEMINI_API_KEY en la configuración del servidor." });
-
-  let message, history;
-  try {
-    ({ message, history = [] } = JSON.parse(event.body || "{}"));
-  } catch {
-    return json(400, { error: "Petición mal formada" });
+  if (!apiKey) {
+    return res.status(500).json({ error: "Falta GEMINI_API_KEY en Vercel." });
   }
-  if (typeof message !== "string" || !message.trim()) return json(400, { error: "Mensaje vacío" });
+
+  let body = req.body;
+  if (typeof body === "string") {
+    try { body = JSON.parse(body); } catch { body = {}; }
+  }
+  let { message, history = [] } = body || {};
+
+  if (typeof message !== "string" || !message.trim()) {
+    return res.status(400).json({ error: "Mensaje vacío" });
+  }
   message = message.slice(0, 500);
 
   const safeHistory = (Array.isArray(history) ? history : [])
@@ -47,7 +41,7 @@ exports.handler = async (event) => {
   };
 
   try {
-    const res = await fetch(
+    const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
       {
         method: "POST",
@@ -56,24 +50,19 @@ exports.handler = async (event) => {
       }
     );
 
-    const rawText = await res.text();
-    let data;
-    try {
-      data = JSON.parse(rawText);
-    } catch {
-      return json(502, { error: `Respuesta inesperada (${res.status}): ${rawText.slice(0, 120)}` });
-    }
+    const data = await response.json();
 
-    if (!res.ok) {
-      return json(502, { error: data.error?.message || "La API de Gemini devolvió un error." });
+    if (!response.ok) {
+      return res.status(502).json({ error: data.error?.message || "Error en la API de Gemini." });
     }
 
     const reply = data.candidates?.[0]?.content?.parts?.map(p => p.text).join("").trim();
-    if (!reply) return json(200, { reply: "Mis disculpas: no he podido formular una respuesta adecuada. ¿Podría reformular la pregunta?" });
+    if (!reply) {
+      return res.status(200).json({ reply: "Mis disculpas: no he podido formular una respuesta adecuada." });
+    }
 
-    return json(200, { reply });
+    return res.status(200).json({ reply });
   } catch (err) {
-    console.error("Error de red:", err);
-    return json(500, { error: "Fallo al conectar con el núcleo de J.A.R.V.I.S." });
+    return res.status(500).json({ error: "Fallo al conectar con el núcleo de J.A.R.V.I.S." });
   }
 };
