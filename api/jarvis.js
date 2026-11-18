@@ -8,43 +8,82 @@ const SYSTEM_PROMPT =
   "Prohibido usar asteriscos, listas, negritas o markdown porque rompen el sintetizador de voz. " +
   "Si los alumnos hacen una pregunta de clase, no les sueltes el rollo de libro de texto: rétales con una pregunta ingeniosa, ponles un ejemplo cotidiano y haz que lleguen ellos a la respuesta.";
 
-module.exports = async (req, res) => {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Método no permitido" });
-  }
+module.exports = async function handler(req, res) {
+  try {
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Método no permitido" });
+    }
 
-  const apiKey = process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.trim() : "";
-  if (!apiKey) {
-    return res.status(500).json({ error: "Falta GEMINI_API_KEY en Vercel." });
-  }
+    const apiKey = (process.env.GEMINI_API_KEY || "").trim();
+    if (!apiKey) {
+      return res.status(500).json({ error: "Falta GEMINI_API_KEY en Vercel." });
+    }
 
-  let body = req.body;
-  if (typeof body === "string") {
-    try { body = JSON.parse(body); } catch { body = {}; }
-  }
-  const { message = "", audio = null, mimeType = "audio/webm", history = [] } = body || {};
+    let body = req.body;
+    if (typeof body === "string") {
+      try {
+        body = JSON.parse(body);
+      } catch (e) {
+        body = {};
+      }
+    } else if (!body || typeof body !== "object") {
+      body = {};
+    }
 
-  if (!audio && (typeof message !== "string" || !message.trim())) {
-    return res.status(400).json({ error: "Mensaje vacío" });
-  }
+    const message = typeof body.message === "string" ? body.message.trim() : "";
+    const audio = typeof body.audio === "string" ? body.audio : null;
+    const mimeType = typeof body.mimeType === "string" ? body.mimeType : "audio/webm";
+    const history = Array.isArray(body.history) ? body.history : [];
 
-  const safeHistory = (Array.isArray(history) ? history : [])
-    .filter(h => h && (h.role === "user" || h.role === "model") && typeof h.parts?.[0]?.text === "string")
-    .slice(-12)
-    .map(h => ({ role: h.role, parts: [{ text: h.parts[0].text.slice(0, 2000) }] }));
+    if (!audio && !message) {
+      return res.status(400).json({ error: "Mensaje vacío" });
+    }
 
-  const userParts = [];
-  if (audio) {
-    const cleanMime = (mimeType || "audio/webm").split(";")[0];
-    userParts.push({
-      inlineData: {
-        mimeType: cleanMime,
-        data: audio,
-      },
-    });
-    userParts.push({
-      text: "Escucha este audio en español y responde directamente a lo que te dicen siguiendo tu personalidad.",
-    });
-  } else {
-    userParts.push({ text: message.slice(0, 500) });
-  }
+    const safeHistory = history
+      .filter(h => h && (h.role === "user" || h.role === "model") && h.parts && h.parts[0] && typeof h.parts[0].text === "string")
+      .slice(-10)
+      .map(h => ({ role: h.role, parts: [{ text: h.parts[0].text.slice(0, 1500) }] }));
+
+    const userParts = [];
+    if (audio) {
+      const cleanMime = (mimeType || "audio/webm").split(";")[0].trim() || "audio/webm";
+      userParts.push({
+        inline_data: {
+          mime_type: cleanMime,
+          data: audio
+        }
+      });
+      userParts.push({
+        text: "Escucha este mensaje de voz en español y responde directamente con tu personalidad."
+      });
+    } else {
+      userParts.push({ text: message.slice(0, 500) });
+    }
+
+    const payload = {
+      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents: [...safeHistory, { role: "user", parts: userParts }],
+      generationConfig: { temperature: 0.85, maxOutputTokens: 800 }
+    };
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }
+    );
+
+    const rawText = await response.text();
+    let data = {};
+    try {
+      data = JSON.parse(rawText);
+    } catch (e) {
+      return res.status(502).json({
+        error: `Respuesta no válida de Google (${response.status}): ${rawText.slice(0, 100)}`
+      });
+    }
+
+    if (!response.ok) {
+      const msg
