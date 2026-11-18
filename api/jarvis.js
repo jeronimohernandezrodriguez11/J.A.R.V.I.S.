@@ -86,4 +86,21 @@ module.exports = async function handler(req, res) {
     }
 
     if (!response.ok) {
-      const msg
+      const msg = (data && data.error && data.error.message) ? data.error.message : `Error HTTP ${response.status}`;
+      return res.status(502).json({ error: msg });
+    }
+
+    const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+    const reply = parts.map(p => p.text || "").join("").trim();
+
+    if (!reply) {
+      return res.status(200).json({ reply: "No te he escuchado del todo claro, ¿me lo repites?" });
+    }
+
+    return res.status(200).json({ reply });
+  } catch (err) {
+    return res.status(500).json({
+      error: `Error interno en api/jarvis: ${err && err.message ? err.message : String(err)}`
+    });
+  }
+};
