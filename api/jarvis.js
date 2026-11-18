@@ -22,47 +22,29 @@ module.exports = async (req, res) => {
   if (typeof body === "string") {
     try { body = JSON.parse(body); } catch { body = {}; }
   }
-  let { message, history = [] } = body || {};
+  const { message = "", audio = null, mimeType = "audio/webm", history = [] } = body || {};
 
-  if (typeof message !== "string" || !message.trim()) {
+  if (!audio && (typeof message !== "string" || !message.trim())) {
     return res.status(400).json({ error: "Mensaje vacío" });
   }
-  message = message.slice(0, 500);
 
   const safeHistory = (Array.isArray(history) ? history : [])
     .filter(h => h && (h.role === "user" || h.role === "model") && typeof h.parts?.[0]?.text === "string")
     .slice(-12)
     .map(h => ({ role: h.role, parts: [{ text: h.parts[0].text.slice(0, 2000) }] }));
 
-  const payload = {
-    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-    contents: [...safeHistory, { role: "user", parts: [{ text: message }] }],
-    generationConfig: { temperature: 0.8, maxOutputTokens: 1024 },
-  };
-
-  try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return res.status(502).json({ error: data.error?.message || "Error en la API de Gemini." });
-    }
-
-    const reply = data.candidates?.[0]?.content?.parts?.map(p => p.text).join("").trim();
-    if (!reply) {
-      return res.status(200).json({ reply: "Mis disculpas: no he podido formular una respuesta adecuada." });
-    }
-
-    return res.status(200).json({ reply });
-  } catch (err) {
-    return res.status(500).json({ error: "Fallo al conectar con el núcleo de J.A.R.V.I.S." });
+  const userParts = [];
+  if (audio) {
+    const cleanMime = (mimeType || "audio/webm").split(";")[0];
+    userParts.push({
+      inlineData: {
+        mimeType: cleanMime,
+        data: audio,
+      },
+    });
+    userParts.push({
+      text: "Escucha este audio en español y responde directamente a lo que te dicen siguiendo tu personalidad.",
+    });
+  } else {
+    userParts.push({ text: message.slice(0, 500) });
   }
-};
