@@ -1,171 +1,256 @@
-/* ===== J.A.R.V.I.S. · Lógica del frontend ===== */
+const core = document.getElementById("core");
+const statusText = document.getElementById("statusText");
+const chatLog = document.getElementById("chatLog");
+const chatForm = document.getElementById("chatForm");
+const userInput = document.getElementById("userInput");
+const micBtn = document.getElementById("micBtn");
+const muteBtn = document.getElementById("muteBtn");
+const voiceSelect = document.getElementById("voiceSelect");
+const memStat = document.getElementById("memStat");
+const pingStat = document.getElementById("pingStat");
+const visualizerBars = document.querySelectorAll("#visualizer i");
 
-const core   = document.getElementById("core");
-const status = document.getElementById("status");
-const log    = document.getElementById("log");
-const input  = document.getElementById("input");
-const sendBtn = document.getElementById("send");
-const micBtn = document.getElementById("mic");
+let history = [];
+let isMuted = false;
+let selectedVoice = null;
 
-const STATES = {
-  idle:     { cls: "idle",     text: "SISTEMA EN ESPERA" },
-  thinking: { cls: "thinking", text: "PROCESANDO..." },
-  speaking: { cls: "speaking", text: "TRANSMITIENDO" },
-};
+// --- 1. SELECTOR DE VOCES NATURALES ---
+function loadVoices() {
+  if (!("speechSynthesis" in window)) return;
+  const allVoices = window.speechSynthesis.getVoices();
+  const esVoices = allVoices.filter(v => v.lang.toLowerCase().startsWith("es"));
+  if (!esVoices.length) return;
 
-// Historial corto para que Jarvis recuerde el contexto (formato Gemini)
-const history = [];
-let busy = false;
+  esVoices.sort((a, b) => {
+    const score = (v) => {
+      const n = v.name.toLowerCase();
+      if (n.includes("natural") || n.includes("online")) return 4;
+      if (n.includes("google") || n.includes("alvaro") || n.includes("jorge") || n.includes("pablo")) return 3;
+      if (n.includes("premium") || n.includes("enhanced")) return 2;
+      return 1;
+    };
+    return score(b) - score(a);
+  });
 
-/* ---------- Estado visual del núcleo ---------- */
-function setState(name) {
-  core.className = "core " + STATES[name].cls;
-  status.textContent = STATES[name].text;
+  if (voiceSelect) {
+    voiceSelect.innerHTML = "";
+    esVoices.forEach((v, idx) => {
+      const opt = document.createElement("option");
+      opt.value = idx;
+      opt.textContent = `${v.name.replace(/Microsoft |Google /g, "")} (${v.lang})`;
+      voiceSelect.appendChild(opt);
+    });
+    voiceSelect.onchange = () => {
+      selectedVoice = esVoices[voiceSelect.value];
+    };
+  }
+  selectedVoice = esVoices[0];
 }
 
-/* ---------- Registro de conversación ---------- */
-function addMsg(kind, who, text) {
+if ("speechSynthesis" in window) {
+  window.speechSynthesis.onvoiceschanged = loadVoices;
+  loadVoices();
+}
+
+// --- 2. SÍNTESIS DE VOZ ---
+function speak(text) {
+  if (isMuted || !("speechSynthesis" in window)) {
+    setState("idle", "SISTEMA EN LÍNEA — ESPERANDO ÓRDENES");
+    return;
+  }
+  window.speechSynthesis.cancel();
+
+  const cleanText = text.replace(/[*_#`~]/g, "").trim();
+  const sentences = cleanText.match(/[^.!?]+[.!?]*/g) || [cleanText];
+
+  setState("speaking", "TRANSMITIENDO AUDIO...");
+
+  sentences.forEach((sentence, idx) => {
+    const utter = new SpeechSynthesisUtterance(sentence.trim());
+    if (selectedVoice) utter.voice = selectedVoice;
+    utter.lang = selectedVoice?.lang || "es-ES";
+    utter.rate = 1.05;
+    utter.pitch = 0.96;
+
+    if (idx === sentences.length - 1) {
+      utter.onend = () => setState("idle", "SISTEMA EN LÍNEA — ESPERANDO ÓRDENES");
+      utter.onerror = () => setState("idle", "SISTEMA EN LÍNEA — ESPERANDO ÓRDENES");
+    }
+    window.speechSynthesis.speak(utter);
+  });
+}
+
+// --- 3. INTERFAZ Y ESTADO ---
+function setState(state, label) {
+  if (core) core.setAttribute("data-state", state);
+  if (statusText) statusText.textContent = label;
+}
+
+function appendMessage(role, text) {
   const div = document.createElement("div");
-  div.className = "msg " + kind;
-  const label = document.createElement("span");
-  label.className = "who";
-  label.textContent = "> " + who;
-  div.append(label, document.createTextNode(text)); // textContent: evita inyección HTML
-  log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
+  div.className = `msg ${role === "user" ? "user" : "jarvis"}`;
+  div.innerHTML = `<span class="msg-tag">${role === "user" ? "OPERADOR (AULA)" : "J.A.R.V.I.S."}</span><p></p>`;
+  div.querySelector("p").textContent = text;
+  chatLog.appendChild(div);
+  chatLog.scrollTop = chatLog.scrollHeight;
 }
 
-/* ---------- Envío al backend ---------- */
-async function sendMessage(text) {
-  text = text.trim();
-  if (!text || busy) return;
+// --- 4. ENVÍO DE TEXTO O AUDIO A GEMINI ---
+async function sendToJarvis({ text = "", audio = null, mimeType = "" }) {
+  if (!audio && !text.trim()) return;
 
-  busy = true;
-  sendBtn.disabled = true;
-  speechSynthesis.cancel();          // corta cualquier locución anterior
-  addMsg("user", "USUARIO", text);
-  input.value = "";
-  setState("thinking");
+  appendMessage("user", audio ? "🎙️ [Mensaje de voz transmitido]" : text);
+  userInput.value = "";
+  setState("thinking", "PROCESANDO EN EL NÚCLEO...");
 
-try {
+  const t0 = performance.now();
+  try {
     const res = await fetch("/api/jarvis", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: text, history }),
+      body: JSON.stringify({ message: text, audio, mimeType, history }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Error de comunicación");
 
-    history.push({ role: "user",  parts: [{ text }] });
-    history.push({ role: "model", parts: [{ text: data.reply }] });
-    if (history.length > 12) history.splice(0, 2);   // máx. 6 turnos
+    if (pingStat) pingStat.textContent = `${Math.round(performance.now() - t0)} ms`;
 
-    addMsg("bot", "J.A.R.V.I.S.", data.reply);
+    history.push({ role: "user", parts: [{ text: audio ? "(Mensaje de voz)" : text }] });
+    history.push({ role: "model", parts: [{ text: data.reply }] });
+    if (history.length > 12) history = history.slice(-12);
+    if (memStat) memStat.textContent = `${history.length} / 12 Nodos`;
+
+    appendMessage("jarvis", data.reply);
     speak(data.reply);
   } catch (err) {
-    addMsg("err", "ERROR", err.message);
-    setState("idle");
-  } finally {
-    busy = false;
-    sendBtn.disabled = false;
+    setState("idle", "ERROR DE ENLACE");
+    appendMessage("jarvis", `Fallo en los sensores: ${err.message}`);
   }
 }
 
-/* ---------- Síntesis de voz ---------- */
-let voices = [];
-function loadVoices() { voices = speechSynthesis.getVoices(); }
-loadVoices();
-speechSynthesis.onvoiceschanged = loadVoices;   // Chrome las carga de forma asíncrona
+chatForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  sendToJarvis({ text: userInput.value });
+});
 
-function speak(text) {
-  // Quita restos de markdown para que el sintetizador no los lea
-  const clean = text.replace(/[*_#`>~|]/g, "").replace(/\s+/g, " ");
-  const u = new SpeechSynthesisUtterance(clean);
-  u.lang = "es-ES";
-  u.voice = voices.find(v => v.lang === "es-ES") || voices.find(v => v.lang.startsWith("es")) || null;
-  u.rate = 0.97;
-  u.pitch = 0.85;                       // tono algo más grave
-
-  u.onstart = () => setState("speaking");
-  u.onend   = () => setState("idle");   // vuelve a espera al terminar
-  u.onerror = () => setState("idle");
-  speechSynthesis.speak(u);
+if (muteBtn) {
+  muteBtn.addEventListener("click", () => {
+    isMuted = !isMuted;
+    if (isMuted && "speechSynthesis" in window) window.speechSynthesis.cancel();
+    muteBtn.textContent = isMuted ? "🔇 SILENCIADO" : "🔊 VOZ ACTIVA";
+  });
 }
 
-// --- 5. RECONOCIMIENTO DE VOZ (MICRÓFONO BLINDADO) ---
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+// --- 5. GRABACIÓN DE MICRO DIRECTA A GEMINI (UNIVERSAL) ---
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+let audioContext = null;
+let animFrame = null;
+let silenceTimer = null;
 
-if (SpeechRecognition) {
-  const recognition = new SpeechRecognition();
-  recognition.lang = "es-ES";
-  recognition.continuous = false;
-  recognition.interimResults = true; // Muestra lo que hablas en tiempo real
-  recognition.maxAlternatives = 1;
+function stopVisualizer() {
+  if (animFrame) cancelAnimationFrame(animFrame);
+  if (silenceTimer) clearTimeout(silenceTimer);
+  if (audioContext) {
+    audioContext.close().catch(() => {});
+    audioContext = null;
+  }
+  visualizerBars.forEach(bar => (bar.style.height = "8px"));
+}
 
-  let isListening = false;
-  let finalTranscript = "";
+async function toggleMic() {
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
 
-  micBtn.addEventListener("click", () => {
-    window.speechSynthesis.cancel();
+  // Si ya está grabando, al pulsar otra vez enviamos el audio
+  if (isRecording && mediaRecorder && mediaRecorder.state !== "inactive") {
+    mediaRecorder.stop();
+    return;
+  }
 
-    if (isListening) {
-      recognition.stop();
-      return;
-    }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : MediaRecorder.isTypeSupported("audio/mp4")
+      ? "audio/mp4"
+      : "";
 
-    finalTranscript = "";
-    userInput.value = "";
-    try {
-      recognition.start();
-    } catch (err) {
-      recognition.stop();
-    }
-  });
+    mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    audioChunks = [];
+    isRecording = true;
 
-  recognition.onstart = () => {
-    isListening = true;
     micBtn.classList.add("active");
-    setState("listening", "ESCUCHANDO... HABLA AHORA");
-  };
+    setState("listening", "ESCUCHANDO... (PULSA 🎙️ O HAZ UNA PAUSA PARA ENVIAR)");
 
-  recognition.onresult = (e) => {
-    let interimTranscript = "";
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const piece = e.results[i][0].transcript;
-      if (e.results[i].isFinal) {
-        finalTranscript += piece;
-      } else {
-        interimTranscript += piece;
+    // Visualizador de ondas en tiempo real y detector de pausa
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioContext.createMediaStreamSource(stream);
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 64;
+    source.connect(analyser);
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+    let hasSpoken = false;
+    function renderWave() {
+      if (!isRecording) return;
+      analyser.getByteFrequencyData(dataArray);
+      const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+
+      visualizerBars.forEach((bar, i) => {
+        const val = dataArray[i * 2] || avg;
+        bar.style.height = `${Math.max(6, Math.min(34, (val / 255) * 38))}px`;
+      });
+
+      if (avg > 18) {
+        hasSpoken = true;
+        if (silenceTimer) {
+          clearTimeout(silenceTimer);
+          silenceTimer = null;
+        }
+      } else if (hasSpoken && !silenceTimer) {
+        // Si ya hablaste y haces 1.6s de silencio, envía solo
+        silenceTimer = setTimeout(() => {
+          if (isRecording && mediaRecorder.state !== "inactive") {
+            mediaRecorder.stop();
+          }
+        }, 1600);
       }
+      animFrame = requestAnimationFrame(renderWave);
     }
-    // Ves en la barra de texto lo que Jarvis está entendiendo en vivo
-    userInput.value = (finalTranscript || interimTranscript).trim();
-  };
+    renderWave();
 
-  recognition.onerror = (e) => {
-    isListening = false;
-    micBtn.classList.remove("active");
-    const errores = {
-      "not-allowed": "PERMISO DE MICRÓFONO DENEGADO EN EL NAVEGADOR",
-      "no-speech": "NO SE DETECTÓ VOZ — INTÉNTALO DE NUEVO",
-      "audio-capture": "NO SE DETECTA NINGÚN MICRÓFONO CONECTADO",
-      "network": "ERROR DE RED EN EL SERVICIO DE VOZ (USA CHROME O EDGE)"
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunks.push(e.data);
     };
-    setState("idle", errores[e.error] || `ERROR DE MICRO: ${e.error.toUpperCase()}`);
-  };
 
-  recognition.onend = () => {
-    isListening = false;
+    mediaRecorder.onstop = () => {
+      isRecording = false;
+      micBtn.classList.remove("active");
+      stopVisualizer();
+      stream.getTracks().forEach(t => t.stop());
+
+      const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+      if (blob.size < 800) {
+        setState("idle", "NO SE DETECTÓ AUDIO — INTÉNTALO DE NUEVO");
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64Audio = reader.result.split(",")[1];
+        sendToJarvis({ audio: base64Audio, mimeType: blob.type });
+      };
+      reader.readAsDataURL(blob);
+    };
+
+    mediaRecorder.start();
+  } catch (err) {
+    isRecording = false;
     micBtn.classList.remove("active");
-    const textToSend = userInput.value.trim();
-    if (textToSend) {
-      sendMessage(textToSend);
-    } else if (core.getAttribute("data-state") === "listening") {
-      setState("idle", "SISTEMA EN LÍNEA — ESPERANDO ÓRDENES");
-    }
-  };
-} else {
-  micBtn.addEventListener("click", () => {
-    setState("idle", "ESTE NAVEGADOR NO SOPORTA VOZ — ABRE CHROME O EDGE");
-  });
+    stopVisualizer();
+    setState("idle", "PERMISO DE MICRÓFONO BLOQUEADO — REVISA EL CANDADO DE LA URL");
+  }
 }
+
+micBtn.addEventListener("click", toggleMic);
